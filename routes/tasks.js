@@ -21,9 +21,45 @@ module.exports = (router) => {
                 }
             }
 
-            // Handle 'count' parameter - count only uses where filter
+            // Handle 'count' parameter - apply same query parameters as find
             if (req.query.count === 'true') {
-                Task.countDocuments(whereFilter).exec((err, count) => {
+                // Build query with same filters as find operation
+                let countQuery = Task.find(whereFilter);
+
+                // Apply sort if specified (needed for consistent skip/limit behavior)
+                if (req.query.sort) {
+                    try {
+                        const sortObj = JSON.parse(req.query.sort);
+                        countQuery = countQuery.sort(sortObj);
+                    } catch (err) {
+                        return res.status(400).json({
+                            message: "Invalid 'sort' parameter. Must be valid JSON.",
+                            data: {}
+                        });
+                    }
+                }
+
+                // Apply skip if specified
+                if (req.query.skip) {
+                    const skip = parseInt(req.query.skip);
+                    if (!isNaN(skip) && skip >= 0) {
+                        countQuery = countQuery.skip(skip);
+                    }
+                }
+
+                // Apply limit if specified
+                if (req.query.limit) {
+                    const limit = parseInt(req.query.limit);
+                    if (!isNaN(limit) && limit >= 0) {
+                        countQuery = countQuery.limit(limit);
+                    }
+                } else {
+                    // Default limit of 100 for tasks
+                    countQuery = countQuery.limit(100);
+                }
+
+                // Execute query and count results (countDocuments ignores skip/limit, so we use find and count)
+                countQuery.exec((err, results) => {
                     if (err) {
                         return res.status(500).json({
                             message: "Server error occurred while counting tasks.",
@@ -32,7 +68,7 @@ module.exports = (router) => {
                     }
                     return res.status(200).json({
                         message: "OK",
-                        data: count
+                        data: results ? results.length : 0
                     });
                 });
                 return;
