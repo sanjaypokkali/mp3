@@ -1,5 +1,6 @@
 var User = require('../models/user')
 var Task = require('../models/task')
+var mongoose = require('mongoose')
 module.exports = (router) => {
 
     var userRoute = router.route("/users")
@@ -243,9 +244,23 @@ module.exports = (router) => {
                 });
             }
 
+            // Validate user ID format (MongoDB ObjectId)
+            if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+                return res.status(400).json({
+                    message: "Invalid user ID format.",
+                    data: {}
+                });
+            }
+
             // First, find the existing user to get their old pendingTasks
             User.findById(req.params.id, (err, existingUser) => {
                 if (err) {
+                    if (err.name === 'CastError') {
+                        return res.status(400).json({
+                            message: "Invalid user ID format.",
+                            data: {}
+                        });
+                    }
                     return res.status(500).json({
                         message: "Server error occurred while retrieving user.",
                         data: {}
@@ -264,6 +279,16 @@ module.exports = (router) => {
                 // Deduplicate new pending tasks and normalize to strings
                 const rawNew = req.body.pendingTasks !== undefined ? req.body.pendingTasks : [];
                 const newPendingTasks = Array.from(new Set(rawNew.map(t => t.toString())));
+                
+                // Validate task ID formats in newPendingTasks
+                const invalidTaskIds = newPendingTasks.filter(taskId => !mongoose.Types.ObjectId.isValid(taskId));
+                if (invalidTaskIds.length > 0) {
+                    return res.status(400).json({
+                        message: "Invalid task ID format.",
+                        data: {}
+                    });
+                }
+                
                 // Compute tasks being added (present in new but not in old)
                 const oldTaskSet = new Set(oldPendingTasks.map(t => t.toString()));
                 const tasksToAdd = newPendingTasks.filter(taskId => !oldTaskSet.has(taskId.toString()));
@@ -289,7 +314,7 @@ module.exports = (router) => {
 
                         // Check if all tasks exist (tasks array length should match tasksToAdd length)
                         if (tasks.length !== tasksToAdd.length) {
-                            return res.status(400).json({
+                            return res.status(404).json({
                                 message: "One or more tasks not found.",
                                 data: {}
                             });
@@ -319,19 +344,20 @@ module.exports = (router) => {
                                     data: {}
                                 });
                             }
-                            performUpdate(oldPendingTasks, newPendingTasks);
+                            performUpdate(oldPendingTasks, newPendingTasks, existingUser);
                         });
                     } else {
-                        performUpdate(oldPendingTasks, newPendingTasks);
+                        performUpdate(oldPendingTasks, newPendingTasks, existingUser);
                     }
                 }
             });
 
-            function performUpdate(oldPendingTasks, newPendingTasks) {
-                // Build update data
+            function performUpdate(oldPendingTasks, newPendingTasks, existingUser) {
+                // Build update data - preserve dateCreated from existing user
                 const updateData = {
                     name: req.body.name.trim(),
-                    email: req.body.email.trim()
+                    email: req.body.email.trim(),
+                    dateCreated: existingUser.dateCreated // Preserve dateCreated
                 };
 
                 // Set default values for fields not specified
@@ -373,7 +399,7 @@ module.exports = (router) => {
                         // Find tasks that were added (in new but not in old)
                         const tasksToAssign = newPendingTasks.filter(taskId => !oldTaskSet.has(taskId.toString()));
 
-                        // Unassign tasks that were removed from pendingTasks
+                        // Two-way reference 1: Unassign tasks that were removed from pendingTasks
                         if (tasksToUnassign.length > 0) {
                             Task.updateMany(
                                 { _id: { $in: tasksToUnassign } },
@@ -387,7 +413,36 @@ module.exports = (router) => {
                             );
                         }
 
-                        // Assign tasks that were added to pendingTasks
+                        // Two-way reference 2: Remove tasks from other users' pendingTasks before assigning to this user
+                        // First, find which tasks are currently assigned to other users
+                        if (tasksToAssign.length > 0) {
+                            Task.find({ _id: { $in: tasksToAssign }, assignedUser: { $ne: "" } }, (err, tasksAssignedToOthers) => {
+                                if (!err && tasksAssignedToOthers.length > 0) {
+                                    // Group tasks by their current assignedUser
+                                    const tasksByUser = {};
+                                    tasksAssignedToOthers.forEach(task => {
+                                        const assignedUser = task.assignedUser;
+                                        if (!tasksByUser[assignedUser]) {
+                                            tasksByUser[assignedUser] = [];
+                                        }
+                                        tasksByUser[assignedUser].push(task._id.toString());
+                                    });
+
+                                    // Remove tasks from each user's pendingTasks
+                                    Object.keys(tasksByUser).forEach(userId => {
+                                        User.findByIdAndUpdate(
+                                            userId,
+                                            { $pullAll: { pendingTasks: tasksByUser[userId] } },
+                                            (err) => {
+                                                // Continue even if error
+                                            }
+                                        );
+                                    });
+                                }
+                            });
+                        }
+
+                        // Two-way reference 3: Assign tasks that were added to pendingTasks
                         if (tasksToAssign.length > 0) {
                             Task.updateMany(
                                 { _id: { $in: tasksToAssign } },

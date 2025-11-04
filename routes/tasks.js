@@ -335,6 +335,14 @@ module.exports = (router) => {
                                 data: {}
                             });
                         } else {
+
+                            if (user && req.body.assignedUserName !== undefined && req.body.assignedUserName !== "" && req.body.assignedUserName !== user.name) {
+                                return res.status(400).json({
+                                    message: "Assigned user name does not match the user's name.",
+                                    data: {}
+                                });   
+                            }
+
                             updateData.assignedUserName = user.name;
                             performUpdate();
                         }
