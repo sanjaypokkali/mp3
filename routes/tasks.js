@@ -168,7 +168,7 @@ module.exports = (router) => {
                                 data: {}
                             });   
                         }
-                        taskData.assignedUserName = req.body.assignedUserName;
+                        taskData.assignedUserName = user.name;
                     }    
                 });
             }
