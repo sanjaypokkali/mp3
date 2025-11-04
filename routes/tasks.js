@@ -169,14 +169,15 @@ module.exports = (router) => {
                             });   
                         }
                         taskData.assignedUserName = user.name;
+                        createTask();
                     }    
                 });
             }
             else {
                 taskData.assignedUser = "";
                 taskData.assignedUserName = "unassigned";
+                createTask();
             }
-            createTask();
 
             function createTask() {
                 const newTask = new Task(taskData);
